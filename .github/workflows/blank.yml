@@ -1,0 +1,427 @@
+<?php
+/**
+ * Plugin Name: Feedback Booster
+ * Description: Envía correos electrónicos personalizados a los clientes de WooCommerce después de un número específico de días para potenciar las reseñas en Google.
+ * Version: 1.0 ALPHA
+ * Author: Andres Haro
+ * Author URI: https://tarrats.es
+ */
+
+if (!defined('ABSPATH')) {
+    exit; // Exit if accessed directly
+}
+
+// Define la versión del plugin
+define('FEEDBACK_BOOSTER_VERSION', '1.0');
+
+// Define las variables globales
+define('SEND_IMMEDIATELY', false); // Cambia a true para enviar el correo de inmediato, false para respetar DAYS_AFTER_PURCHASE
+define('DAYS_AFTER_PURCHASE', 1); // Modifica este valor para cambiar la cantidad de días
+define('EMAIL_RECIPIENT', 0); // Modifica este valor para cambiar el correo electrónico del destinatario
+
+
+
+
+// Función que se encarga de activar el plugin y manejar la versión
+function my_plugin_activation() {
+    global $wpdb;
+    $charset_collate = $wpdb->get_charset_collate();
+    $table_name = $wpdb->prefix . 'wce_email_history';
+
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table_name'") != $table_name) {
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+
+        $sql = "CREATE TABLE $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            email varchar(100) NOT NULL,
+            subject varchar(255) NOT NULL,
+            message text NOT NULL,
+            date datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+            PRIMARY KEY  (id)
+        ) $charset_collate;";
+
+        dbDelta($sql);
+    }
+
+    $current_version = get_option('feedback_booster_version');
+
+    // Verificar la versión actual y realizar acciones según sea necesario
+    if (!$current_version) {
+        // Primera activación del plugin, realizar acciones de configuración inicial
+        // ...
+
+        // Almacenar la versión actual en la base de datos
+        update_option('feedback_booster_version', FEEDBACK_BOOSTER_VERSION);
+    } elseif ($current_version < FEEDBACK_BOOSTER_VERSION) {
+        // Activación de una nueva versión del plugin, realizar acciones de actualización
+        // ...
+
+        // Actualizar la versión almacenada en la base de datos
+        update_option('feedback_booster_version', FEEDBACK_BOOSTER_VERSION);
+    }
+}
+
+// Registra la función de activación y manejo de la versión
+register_activation_hook(__FILE__, 'my_plugin_activation');
+/*
+// Función de actualización del plugin
+function my_plugin_update() {
+    $current_version = '1.0'; // Versión actual del plugin
+    $previous_version = get_option('my_plugin_version'); // Obtener la versión anterior del plugin almacenada en la base de datos
+
+    if ($previous_version && version_compare($previous_version, $current_version, '<')) {
+        // Se ha detectado una versión anterior y se requiere una actualización
+
+        if (version_compare($previous_version, '1.1', '<')) {
+            // Realizar acciones de actualización específicas para la versión 1.1
+            // Por ejemplo, modificar la estructura de la base de datos o ajustar configuraciones
+        }
+
+        if (version_compare($previous_version, '2.0', '<')) {
+            // Realizar acciones de actualización específicas para la versión 2.0
+            // Por ejemplo, agregar nuevas funcionalidades o ajustar configuraciones
+        }
+
+        // Eliminar la versión anterior sin borrar datos ni configuraciones
+        delete_option('my_plugin_version');
+
+        // Actualizar la versión almacenada en la base de datos
+        update_option('my_plugin_version', $current_version);
+    }
+}
+*/
+
+// Función de actualización del plugin
+function my_plugin_update() {
+    // Obtén la versión almacenada en la base de datos
+    $stored_version = get_option('feedback_booster_version');
+
+    // Si la versión almacenada es diferente de la versión actual, necesitas actualizar
+    if (FEEDBACK_BOOSTER_VERSION !== $stored_version) {
+        
+        // Aquí es donde haces las actualizaciones específicas basadas en la versión
+        if (version_compare($stored_version, '1.1', '<')) {
+            // Actualizaciones para la versión 1.1
+        }
+        if (version_compare($stored_version, '2.0', '<')) {
+            // Actualizaciones para la versión 2.0
+        }
+        // ...
+
+        // Cuando termines de actualizar, guarda la nueva versión en la base de datos
+        update_option('feedback_booster_version', FEEDBACK_BOOSTER_VERSION);
+    }
+}
+
+register_activation_hook(__FILE__, 'my_plugin_update');
+
+//se encarga de enviar un correo electrónico personalizado a los clientes de WooCommerce basado en una plantilla
+function send_custom_email($order) {
+    // Configurar correo
+    $headers = array('Content-Type: text/html; charset=UTF-8');
+    $subject = 'Te pedimos un pequeño favor';
+    $to = EMAIL_RECIPIENT == 0 ? $order->get_billing_email() : get_option('admin_email');
+
+    // Carga el contenido de la plantilla de correo
+    $template_path = plugin_dir_path(__FILE__) . 'plantilla-resena.php';
+    $template_content = file_get_contents($template_path);
+
+    // Utiliza la plantilla de correo
+    $message = str_replace(
+        array('{customer_name}', '{order_id}'),
+        array($order->get_billing_first_name(), $order->get_id()),
+        $template_content
+    );
+
+	// Agrega la entrada en la tabla de historial de correos
+	global $wpdb;
+	$table_name = $wpdb->prefix . "email_history";
+	$wpdb->insert($table_name, array(
+    'email' => $to,
+    'name' => $order->get_billing_first_name(),
+    'order_id' => $order->get_id(),  // Asegúrate de agregar esta línea
+    'sent_at' => current_time('mysql'),
+	));
+
+
+    // Actualiza la tabla de órdenes enviadas
+    $table_name = $wpdb->prefix . "email_sent_orders";
+    $wpdb->insert($table_name, array(
+        'order_id' => $order->get_id(),
+        'sent_at' => current_time('mysql'),
+    ));
+
+    // Envía el correo
+    wp_mail($to, $subject, $message, $headers);
+}
+
+
+//Crea una tabla en la BBDD para almacenar el historico de los correos enviados
+function create_email_history_table() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . "email_history";
+
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+        id mediumint(9) NOT NULL AUTO_INCREMENT,
+        email varchar(100) NOT NULL,
+        name varchar(100) NOT NULL,
+        order_id bigint(20) NOT NULL,  -- Añadimos el id de pedido
+        sent_at datetime NOT NULL,
+        PRIMARY KEY (id)
+    ) $charset_collate;";
+
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
+}
+
+register_activation_hook(__FILE__, 'create_email_history_table');
+
+// Función para enviar un correo de prueba al activar el plugin
+function send_test_email() {
+    $to = get_option('admin_email');
+    $subject = 'Correo de prueba - WooCommerce Custom Emails';
+    $headers = array('Content-Type: text/html; charset=UTF-8');
+
+    // Carga el contenido de la plantilla de correo
+    $template_path = plugin_dir_path(__FILE__) . 'plantilla-resena.php';
+    $template_content = file_get_contents($template_path);
+
+    // Utiliza la plantilla de correo
+    $message = str_replace(
+        array('{customer_name}', '{order_id}'),
+        array('Nombre del cliente', '12345'),
+        $template_content
+    );
+
+    wp_mail($to, $subject, $message, $headers);
+}
+
+register_activation_hook(__FILE__, 'send_test_email');
+
+function wce_shortcode_send_test_email($atts) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'wce_email_history';
+
+    if (isset($_POST['wce_send_test_email'])) {
+        // Datos de prueba
+        $email = get_option('admin_email');
+        $first_name = 'Nombre';
+        $last_name = 'Apellido';
+        $order_id = '12345';
+
+        $template_path = WP_PLUGIN_DIR . '/woocommerce-custom-emails/plantilla-resena.php';
+        $template_content = file_get_contents($template_path);
+
+        $message = str_replace(
+            array('{customer_name}', '{order_id}'),
+            array($first_name . ' ' . $last_name, $order_id),
+            $template_content
+        );
+
+        $headers = array('Content-Type: text/html; charset=UTF-8');
+
+        wp_mail($email, 'Correo de prueba', $message, $headers);
+
+        // Almacena el correo electrónico de prueba en el historial
+        $wpdb->insert(
+            $table_name,
+            array(
+                'email' => $email,
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'sent_date' => current_time('mysql', 1)
+            ),
+            array('%s', '%s', '%s', '%s')
+        );
+
+        return '<p>Correo electrónico de prueba enviado.</p>';
+    }
+
+    return '
+        <form action="" method="post">
+            <input type="submit" name="wce_send_test_email" value="Enviar correo electrónico de prueba">
+        </form>
+    ';
+}
+add_shortcode('wce_send_test_email', 'wce_shortcode_send_test_email');
+
+//Funcion que s encarga del reenvio de los correos desde el historico
+function resend_email($email_id) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . "email_history";
+
+    // Obtiene la información del correo electrónico de la base de datos
+    $email = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $email_id));
+
+    if ($email) {
+        // Carga el contenido de la plantilla de correo
+        $template_path = plugin_dir_path(__FILE__) . 'plantilla-resena.php';
+        $template_content = file_get_contents($template_path);
+
+        // Utiliza la plantilla de correo
+        $message = str_replace(
+            array('{customer_name}', '{order_id}'),
+            array($email->name, $email->order_id),
+            $template_content
+        );
+
+        $headers = array('Content-Type: text/html; charset=UTF-8');
+
+        // Aquí puedes utilizar la función wp_mail() de WordPress para reenviar el correo electrónico
+        wp_mail($email->email, "Asunto del correo electrónico", $message, $headers);
+    }
+}
+
+
+
+
+
+//Genera una vista en una pagina cualquiera a traves de un shortcode
+function show_email_history() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . "email_history";
+
+    if (isset($_POST['delete_email_history'])) {
+        $wpdb->query("TRUNCATE TABLE $table_name");
+    }
+
+    if (isset($_POST['resend_email'])) {
+        $email_id = $_POST['resend_email'];
+        // Llama a tu función de reenvío de correo aquí
+        // ...
+        $wpdb->update($table_name, array('resent' => 1), array('id' => $email_id));
+    }
+
+    if (isset($_POST['send_email'])) {
+        custom_email_cron_job(); // Llamando a tu función personalizada aquí
+    }
+
+    $results = $wpdb->get_results("SELECT * FROM $table_name ORDER BY sent_at DESC");
+
+    echo '<div style="height: 800px; overflow-y: scroll;">';
+    echo '<table>';
+    echo '<tr><th>Correo</th><th>Nombre</th><th>Enviado en</th><th>ID del Pedido</th><th>Acciones</th></tr>';
+    foreach ($results as $row) {
+        $button_color = $row->resent ? 'red' : 'green';
+        $text_color = $row->resent ? 'white' : 'black';
+        echo '<tr>
+                <td>' . $row->email . '</td>
+                <td>' . $row->name . '</td>
+                <td>' . $row->sent_at . '</td>
+                <td>' . $row->order_id . '</td>
+                <td>
+                    <form action="" method="post">
+                        <button type="submit" name="resend_email" value="' . $row->id . '" style="background-color: ' . $button_color . '; color: ' . $text_color . ';" title="Pulsa para reenviar el correo a este destinatario.">Reenviar</button>
+                    </form>
+                </td>
+            </tr>';
+    }
+    echo '</table>';
+    echo '</div>';
+
+    echo '
+        <div style="display: flex; justify-content: space-between; width: 350px; margin-top: 20px;">
+            <form action="" method="post">
+                <input type="submit" name="delete_email_history" style="margin-right: 10px;" value="Eliminar historial de correos" title="Borra todos los registros del historial de correos" onclick="return confirm(\'¿Estás seguro de que quieres eliminar todo el historial de correos? Esta acción no se puede deshacer.\');">
+            </form>
+            <form action="" method="post">
+                <input type="submit" name="send_email" style="margin-left: 10px;" value="Enviar correo manualmente" title="Envía los correos manualmente ahora mismo">
+            </form>
+        </div>
+    ';
+}
+
+add_shortcode('email_history', 'show_email_history');
+
+//====================================================================================
+// Agregar una tarea cron para ejecutar la función una vez al día
+function add_custom_email_cron_schedule( $schedules ) {
+    $schedules['custom_email_cron'] = array(
+        'interval' => DAY_IN_SECONDS,
+        'display' => __( 'Una vez al día' )
+    );
+    return $schedules;
+}
+
+add_filter( 'cron_schedules', 'add_custom_email_cron_schedule' );
+
+//Esta funcion se ejecuta a traves del cron del servidor para provocar que busque los pedidos que cumplen con las condiciones y envie los coreos 1 vez al dia
+function custom_email_cron_job() {
+    $args = array(
+        'limit' => -1,
+        'return' => 'ids',
+        'status' => array('wc-completed', 'wc-enviado', 'wc-recogido-tienda'),
+    );
+
+    $orders = wc_get_orders($args);
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . "email_sent_orders";
+
+    foreach ($orders as $order_id) {
+        $order = wc_get_order($order_id);
+
+        if ($order->get_status() === 'refunded') {
+            continue;
+        }
+
+        // Comprueba si el correo ya ha sido enviado a esta dirección de correo electrónico
+        $sent_email = $wpdb->get_row( "SELECT * FROM $table_name WHERE order_id = $order_id" );
+
+        // Si ya se ha enviado un correo a esta dirección, pasa al siguiente pedido
+        if ( $sent_email ) {
+            continue;
+        }
+
+        // Si la constante SEND_IMMEDIATELY está definida como true, envía el correo inmediatamente
+        if (defined('SEND_IMMEDIATELY') && SEND_IMMEDIATELY === true) {
+            send_custom_email($order);
+            continue;
+        }
+
+        // Cálculo de la fecha límite
+        $days_after_purchase = DAYS_AFTER_PURCHASE;
+        $max_days = 5;
+        $order_date = $order->get_date_created();
+        $current_date = new WC_DateTime();
+        $date_diff = $current_date->diff($order_date)->days;
+
+        if ($date_diff < $days_after_purchase || $date_diff > $max_days) {
+            continue;
+        }
+
+        send_custom_email($order);
+
+        // Actualiza la tabla de órdenes enviadas
+        $wpdb->insert($table_name, array(
+            'order_id' => $order->get_id(),
+            'sent_at' => current_time('mysql'),
+        ));
+    }
+}
+
+if ( ! wp_next_scheduled( 'custom_email_cron_job' ) ) {
+    wp_schedule_event( time(), 'custom_email_cron', 'custom_email_cron_job' );
+}
+
+add_action( 'custom_email_cron_job', 'custom_email_cron_job' );
+
+
+
+//Modificamos el nombre del remitente del correo por el del ecommerce
+function custom_email_from_name( $original_email_from_name ) {
+  	// Reemplaza el nombre del remitente con el nombre de la tienda
+    return get_bloginfo( 'name' ); 
+}
+add_filter( 'wp_mail_from_name', 'custom_email_from_name' );
+
+
+//========================================================================================================================================
+//ZONA DEL BACKOFFICE
+//========================================================================================================================================
